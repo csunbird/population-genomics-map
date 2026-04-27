@@ -1,0 +1,25 @@
+# Enforce Unix line endings (LF) for all text files.
+# This prevents CRLF/LF warnings on Windows and ensures consistent
+# behaviour when deploying to shinyapps.io (Linux).
+
+* text=auto eol=lf
+
+# R source files
+*.R     text eol=lf
+*.Rmd   text eol=lf
+
+# Data / config
+*.csv   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+
+# Binary files — never convert
+*.vcf.gz  binary
+*.bam     binary
+*.bai     binary
+*.rds     binary
+*.RData   binary

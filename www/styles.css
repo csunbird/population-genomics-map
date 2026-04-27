@@ -1,0 +1,193 @@
+/* =============================================================================
+   styles.css — popgen-map custom styles
+   ============================================================================= */
+
+/* ── Upload sidebar ─────────────────────────────────────────────────────────── */
+
+.demo-banner {
+  background: #E8F5E9;
+  border: 1px solid #A5D6A7;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 4px;
+}
+
+.demo-banner p {
+  font-size: 0.83em;
+  color: #2E7D32;
+  margin: 0 0 8px;
+}
+
+.upload-label {
+  font-size: 0.88em;
+  font-weight: 600;
+  color: #1B3A5C;
+  margin-bottom: 2px;
+  display: block;
+}
+
+.upload-hint {
+  font-size: 0.78em;
+  color: #777;
+  margin: 0 0 4px;
+  line-height: 1.4;
+}
+
+/* ── Map controls ───────────────────────────────────────────────────────────── */
+
+.map-controls {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+
+.map-controls .form-select {
+  font-size: 0.85em;
+}
+
+/* ── Legend box ─────────────────────────────────────────────────────────────── */
+
+.legend-box {
+  background: white;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-top: 8px;
+  display: inline-block;
+  min-width: 220px;
+}
+
+/* ── Leaflet map ────────────────────────────────────────────────────────────── */
+
+.leaflet-container {
+  border-radius: 8px;
+  border: 1px solid #dee2e6;
+}
+
+.leaflet-popup-content-wrapper {
+  border-radius: 8px !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15) !important;
+}
+
+.leaflet-popup-content {
+  margin: 12px 14px !important;
+}
+
+/* ── Stats table ────────────────────────────────────────────────────────────── */
+
+.dataTables_wrapper {
+  font-size: 0.88em;
+}
+
+table.dataTable thead th {
+  background-color: #1B3A5C !important;
+  color: white !important;
+  font-size: 0.85em;
+}
+
+table.dataTable tbody tr:hover {
+  background-color: #E3F2FD !important;
+}
+
+/* ── Summary cards ──────────────────────────────────────────────────────────── */
+
+.card {
+  border-radius: 8px;
+}
+
+/* ── Advanced filter collapsible (details/summary) ──────────────────────────── */
+
+details > summary {
+  user-select: none;
+  outline: none;
+}
+
+details > summary:hover {
+  color: #2E75B6 !important;
+}
+
+details[open] > summary {
+  color: #1B3A5C !important;
+  font-weight: 600;
+}
+
+details .irs--shiny .irs-bar {
+  background: #2E75B6;
+  border-top-color: #2E75B6;
+  border-bottom-color: #2E75B6;
+}
+
+details .irs--shiny .irs-single {
+  background: #2E75B6;
+}
+
+/* ── Run-analysis button: disabled/loading state ─────────────────────────────── */
+
+#upload-run_analysis:disabled,
+[id$="-run_analysis"]:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+/* Spinner shown on the button while processing */
+.btn-loading::after {
+  content: "";
+  display: inline-block;
+  width: 0.75em;
+  height: 0.75em;
+  margin-left: 0.5em;
+  border: 2px solid rgba(255,255,255,0.5);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: btn-spin 0.65s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes btn-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── About tab table ─────────────────────────────────────────────────────────── */
+
+.about-threshold-table td,
+.about-threshold-table th {
+  vertical-align: middle;
+}
+
+/* ── Scenario banner (demo / real data) ──────────────────────────────────────── */
+
+.alert-warning {
+  font-size: 0.83em;
+}
+
+/* ── General ─────────────────────────────────────────────────────────────────── */
+
+.nav-tabs .nav-link {
+  font-size: 0.9em;
+}
+
+code {
+  font-size: 0.85em;
+  background: #f1f3f5;
+  padding: 2px 5px;
+  border-radius: 3px;
+  color: #c0392b;
+}
+
+/* Subtle focus ring consistent with the brand colour */
+:focus-visible {
+  outline: 2px solid #2E75B6;
+  outline-offset: 2px;
+}
+
+/* Prevent Leaflet map from overflowing its container on small screens */
+.leaflet-container {
+  max-width: 100%;
+}
+
+/* Tighten gap between map controls and the Leaflet widget */
+.map-controls + .leaflet-container {
+  margin-top: 0;
+}

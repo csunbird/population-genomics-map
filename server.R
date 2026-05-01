@@ -1,11 +1,11 @@
 # =============================================================================
 # server.R — Main server logic
-# popgen-map Phase 1
+# popgen-map Phase 5
 # =============================================================================
 
 server <- function(input, output, session) {
 
-  # ── Upload module → data ──────────────────────────────────────────────────
+  # ── Upload module → genomic data ──────────────────────────────────────────
   upload_data <- uploadServer("upload")
 
   # ── Compute population statistics (reactive, re-runs when data changes) ──
@@ -51,6 +51,15 @@ server <- function(input, output, session) {
   frohServer("froh", upload_data)
   ne_stats <- neServer("ne", upload_data)   # returns reactive for map Ne overlay
 
+  # ── Phase 4 Goal 1: Environmental data upload ────────────────────────────
+  env_data <- envUploadServer("env_upload", upload_data)
+
+  # ── Phase 4 Goal 2: RDA + LFMM2 GEA ─────────────────────────────────────
+  gea_data <- geaServer("gea", upload_data, env_data)
+
+  # ── Phase 4 Goal 3: Genomic offset / climate vulnerability ───────────────
+  offset_data <- offsetServer("offset", upload_data, env_data, gea_data)
+
   # ── Map module ──────────────────────────────────────────────────────────
   mapServer("map", pop_stats, fst_mat, pop_q, ne_stats)
 
@@ -67,6 +76,22 @@ server <- function(input, output, session) {
 
   # ── PCA module (Phase 2 Goal 3) ──────────────────────────────────────────
   pcaServer("pca", upload_data)
+
+  # ── Phase 5: Export module ─────────────────────────────────────────────
+  exportServer(
+    "export",
+    pop_stats      = pop_stats,
+    fst_mat        = fst_mat,
+    pop_q          = pop_q,
+    ne_stats       = ne_stats,
+    gea_data       = gea_data,
+    offset_data    = offset_data,
+    upload_data    = upload_data,
+    parent_session = session   # needed so "Go to Map" can switch the top-level tab
+  )
+
+  # ── Help module (Phase 5 — static UI, no server logic) ───────────────────
+  helpServer("help")
 
   # ── Switch to map tab automatically when data loads ──────────────────────
   observeEvent(upload_data(), {

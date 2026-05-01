@@ -1,6 +1,6 @@
 # =============================================================================
 # ui.R — Main user interface definition
-# popgen-map Phase 1
+# popgen-map Phase 4
 # =============================================================================
 
 # ── UI helpers ────────────────────────────────────────────────────────────────
@@ -27,7 +27,7 @@ ui <- page_sidebar(
     ),
     tags$span(
       style = "font-size: 0.65em; font-weight: 400; color: #777; margin-left: 12px;",
-      APP_PHASE, " \u2014 v", APP_VERSION
+      APP_PHASE, " — v", APP_VERSION
     )
   ),
   theme = bs_theme(
@@ -54,12 +54,16 @@ ui <- page_sidebar(
     width = 310,
     open  = TRUE,
 
+    # ── Genomic data input section ────────────────────────────────────────────
     tags$h6(
       "Data Input",
       style = "font-weight: 600; color: #1B3A5C; margin-bottom: 8px;"
     ),
 
     uploadUI("upload"),
+
+    # ── Phase 4: Environmental data section ──────────────────────────────────
+    envUploadUI("env_upload"),
 
     tags$hr(style = "margin: 16px 0 12px;"),
     tags$p(
@@ -69,7 +73,8 @@ ui <- page_sidebar(
         "expected &amp; observed heterozygosity (He / Ho), inbreeding (F).<br/>",
         "<strong>Phase 2</strong>: pairwise F&#x209B;&#x209C; heatmap, FST network, PCA, ADMIXTURE pies.<br/>",
         "<strong>Phase 3</strong>: inbreeding (F<sub>ROH</sub>) and effective population size (Ne).<br/>",
-        "Upcoming: adaptive potential (RDA/LFMM2), climate vulnerability."
+        "<strong>Phase 4</strong>: adaptive potential — RDA, LFMM2 GEA, genomic offset.<br/>",
+        "<strong>Phase 5</strong>: export HTML report, CSV, map PNG &amp; chart PNG (2&times; resolution)."
       ))
     )
   ),
@@ -148,13 +153,54 @@ ui <- page_sidebar(
       )
     ),
 
-    # ── Tab 8: About ─────────────────────────────────────────────────────────
+    # ── Tab 8: GEA — Genotype-Environment Association (Phase 4 Goal 2) ────────
+    nav_panel(
+      title = tagList(icon("leaf"), " GEA"),
+      value = "tab_gea",
+      div(
+        class = "p-3",
+        geaUI("gea")
+      )
+    ),
+
+    # ── Tab 9: Genomic Offset / Climate Vulnerability (Phase 4 Goal 3) ────────
+    nav_panel(
+      title = tagList(icon("thermometer-half"), " Offset"),
+      value = "tab_offset",
+      div(
+        class = "p-3",
+        offsetUI("offset")
+      )
+    ),
+
+    # ── Tab 10: Export (Phase 5) ──────────────────────────────────────────────
+    nav_panel(
+      title = tagList(icon("file-export"), " Export"),
+      value = "tab_export",
+      div(
+        class = "p-3",
+        style = "max-width: 760px;",
+        exportUI("export")
+      )
+    ),
+
+    # ── Tab 11: Help (Phase 5) ────────────────────────────────────────────────
+    nav_panel(
+      title = tagList(icon("question-circle"), " Help"),
+      value = "tab_help",
+      div(
+        class = "p-3",
+        helpUI("help")
+      )
+    ),
+
+    # ── Tab 12: About ─────────────────────────────────────────────────────────
     nav_panel(
       title = tagList(icon("info-circle"), " About"),
       value = "tab_about",
       div(
         class = "p-4",
-        style = "max-width: 700px;",
+        style = "max-width: 720px;",
 
         tags$h4("About PopGen Map", style = "color: #1B3A5C;"),
         tags$p(
@@ -187,12 +233,56 @@ ui <- page_sidebar(
             tags$th(style="padding:5px 8px; background:#1B3A5C; color:white; border-radius:0 4px 0 0;", "Guidance")
           )),
           tags$tbody(
-            threshold_row("#D32F2F", "< 0.10",       "🔴 Critical",          "High extinction risk; urgent action required"),
-            threshold_row("#F57C00", "0.10 – 0.15",   "🟠 High risk",          "Low diversity; intervention likely needed"),
-            threshold_row("#FBC02D", "0.15 – 0.20",   "🟡 Moderate risk",      "Monitoring and genetic rescue assessment recommended"),
-            threshold_row("#388E3C", "0.20 – 0.30",   "🟢 Lower risk",         "Moderate diversity; routine monitoring"),
-            threshold_row("#1565C0", "> 0.30",        "🔵 Healthy",            "High diversity; reference population candidate")
+            threshold_row("#D32F2F", "< 0.10",       "\U0001f534 Critical",          "High extinction risk; urgent action required"),
+            threshold_row("#F57C00", "0.10 – 0.15",  "\U0001f7e0 High risk",          "Low diversity; intervention likely needed"),
+            threshold_row("#FBC02D", "0.15 – 0.20",  "\U0001f7e1 Moderate risk",      "Monitoring and genetic rescue assessment recommended"),
+            threshold_row("#388E3C", "0.20 – 0.30",  "\U0001f7e2 Lower risk",         "Moderate diversity; routine monitoring"),
+            threshold_row("#1565C0", "> 0.30",        "\U0001f535 Healthy",            "High diversity; reference population candidate")
           )
+        ),
+
+        tags$h5("Phase 3 metrics", style = "color: #2E75B6; margin-top: 1.2em;"),
+        tags$ul(
+          tags$li(HTML(paste0(
+            "<strong>F<sub>ROH</sub></strong> — Runs of Homozygosity inbreeding coefficient: ",
+            "proportion of the genome in consecutive homozygous SNP runs. ",
+            "Captures <em>recent</em> inbreeding (last ~10 generations). ",
+            "F<sub>ROH</sub> ≥ 0.25 ≈ full-sibling or parent-offspring mating; ",
+            "≥ 0.125 ≈ half-sibling mating; ",
+            "≥ 0.0625 ≈ first-cousin mating."
+          ))),
+          tags$li(HTML(paste0(
+            "<strong>Ne</strong> — Effective population size: the size of an idealised random-mating ",
+            "population that would experience the same rate of genetic drift as the observed population. ",
+            "Estimated from the linkage disequilibrium (r²) among pairs of loci ",
+            "(Waples &amp; Do 2008 single-sample method). ",
+            "IUCN/SSC thresholds: Ne &lt; 50 = immediate extinction risk; ",
+            "Ne &lt; 100 = high risk; Ne &lt; 500 = long-term viability concern."
+          )))
+        ),
+
+        tags$h5("Phase 4 metrics", style = "color: #2E75B6; margin-top: 1.2em;"),
+        tags$ul(
+          tags$li(HTML(paste0(
+            "<strong>Partial RDA</strong> — Redundancy Analysis: multivariate regression of ",
+            "population allele frequencies on environmental variables, with geography partialled out. ",
+            "Identifies which environmental gradients explain genetic variation beyond spatial patterns. ",
+            "Top-loading loci are candidate adaptive variants."
+          ))),
+          tags$li(HTML(paste0(
+            "<strong>LFMM2</strong> — Latent Factor Mixed Model (Caye et al. 2019): ",
+            "per-locus test for genotype-environment association, controlling for ",
+            "population structure via K latent factors. ",
+            "P-values are calibrated by the genomic inflation factor (GIF) and corrected by ",
+            "Benjamini-Hochberg FDR. Identifies single-locus signals of local adaptation."
+          ))),
+          tags$li(HTML(paste0(
+            "<strong>Genomic offset</strong> — RDA-based climate vulnerability metric ",
+            "(Fitzpatrick &amp; Keller 2015): Euclidean distance in constrained ordination space ",
+            "between a population's current and projected future environmental position. ",
+            "Larger values indicate a larger adaptive gap under climate change. ",
+            "Always interpret alongside Ne and connectivity data."
+          )))
         ),
 
         tags$h5("Input format", style = "color: #2E75B6; margin-top: 1.4em;"),
@@ -200,8 +290,9 @@ ui <- page_sidebar(
         tags$code("sample_id, population, latitude, longitude"),
         tags$p(
           style = "margin-top: 0.6em; font-size:0.85em; color:#555;",
-          "VCF files are filtered to biallelic SNPs only. Indels and multi-allelic variants are removed automatically. ",
-          "MAF and missing-data thresholds are configurable in the upload panel."
+          "For Phase 4 (GEA / offset), also upload a per-population environmental CSV with columns: ",
+          tags$code("population, BIO1, BIO12, …"),
+          " or use the WorldClim / CMIP6 auto-fetch option in the sidebar."
         ),
 
         tags$h5("Roadmap", style = "color: #2E75B6; margin-top: 1.4em;"),
@@ -213,36 +304,63 @@ ui <- page_sidebar(
             tags$th(style="padding:4px 8px; background:#f1f3f5; color:#333;", "Status")
           )),
           tags$tbody(
-            tags$tr(tags$td(style="padding:4px 8px;","1"), tags$td(style="padding:4px 8px;","Diversity mapping (He, Ho, \u03c0, F)"), tags$td(style="padding:4px 8px; color:#388E3C;","✅ Done")),
-            tags$tr(tags$td(style="padding:4px 8px; background:#fafafa;","2"), tags$td(style="padding:4px 8px; background:#fafafa;","Population structure: pairwise Fₛₜ heatmap, FST network, PCA, ADMIXTURE pies"), tags$td(style="padding:4px 8px; background:#fafafa; color:#388E3C;","✅ Done")),
-            tags$tr(tags$td(style="padding:4px 8px;","3"), tags$td(style="padding:4px 8px;","Inbreeding (F-ROH) and effective population size (Ne)"), tags$td(style="padding:4px 8px; color:#388E3C;","✅ Done")),
-            tags$tr(tags$td(style="padding:4px 8px; background:#fafafa;","4"), tags$td(style="padding:4px 8px; background:#fafafa;","Adaptive potential: RDA, LFMM2, climate vulnerability"), tags$td(style="padding:4px 8px; background:#fafafa; color:#777;","Planned"))
+            tags$tr(
+              tags$td(style="padding:4px 8px;","1"),
+              tags$td(style="padding:4px 8px;","Diversity mapping (He, Ho, π, F)"),
+              tags$td(style="padding:4px 8px; color:#388E3C;","✅ Done")
+            ),
+            tags$tr(
+              tags$td(style="padding:4px 8px; background:#fafafa;","2"),
+              tags$td(style="padding:4px 8px; background:#fafafa;","Population structure: pairwise Fₛₜ heatmap, FST network, PCA, ADMIXTURE pies"),
+              tags$td(style="padding:4px 8px; background:#fafafa; color:#388E3C;","✅ Done")
+            ),
+            tags$tr(
+              tags$td(style="padding:4px 8px;","3"),
+              tags$td(style="padding:4px 8px;","Inbreeding (F-ROH) and effective population size (Ne)"),
+              tags$td(style="padding:4px 8px; color:#388E3C;","✅ Done")
+            ),
+            tags$tr(
+              tags$td(style="padding:4px 8px; background:#fafafa;","4"),
+              tags$td(style="padding:4px 8px; background:#fafafa;","Adaptive potential: RDA, LFMM2 GEA, genomic offset"),
+              tags$td(style="padding:4px 8px; background:#fafafa; color:#2E75B6;","✅ Done")
+            ),
+            tags$tr(
+              tags$td(style="padding:4px 8px;","5"),
+              tags$td(style="padding:4px 8px;","Export: HTML conservation report, statistics CSV, map PNG, chart PNG (2× res); in-app Help tab"),
+              tags$td(style="padding:4px 8px; color:#388E3C;","✅ Done")
+            )
           )
         ),
 
-        tags$h5("Phase 3 metrics", style = "color: #2E75B6; margin-top: 1.2em;"),
+        tags$h5("Export & Documentation", style = "color: #2E75B6; margin-top: 1.4em;"),
         tags$ul(
           tags$li(HTML(paste0(
-            "<strong>F<sub>ROH</sub></strong> \u2014 Runs of Homozygosity inbreeding coefficient: ",
-            "proportion of the genome in consecutive homozygous SNP runs. ",
-            "Captures <em>recent</em> inbreeding (last ~10 generations). ",
-            "F<sub>ROH</sub> \u2265 0.25 \u2248 full-sibling or parent-offspring mating; ",
-            "\u2265 0.125 \u2248 half-sibling mating; ",
-            "\u2265 0.0625 \u2248 first-cousin mating."
+            "<strong>Conservation Report (HTML)</strong>: full narrative report with all metrics, ",
+            "risk summary, FST matrix, Ne, GEA, and genomic offset — generated from the Export tab."
           ))),
           tags$li(HTML(paste0(
-            "<strong>Ne</strong> \u2014 Effective population size: the size of an idealised random-mating ",
-            "population that would experience the same rate of genetic drift as the observed population. ",
-            "Estimated from the linkage disequilibrium (r\u00b2) among pairs of loci ",
-            "(Waples &amp; Do 2008 single-sample method). ",
-            "IUCN/SSC thresholds: Ne &lt; 50 = immediate extinction risk; ",
-            "Ne &lt; 100 = high risk; Ne &lt; 500 = long-term viability concern."
+            "<strong>Statistics CSV</strong>: per-population diversity table for downstream analysis ",
+            "in R, Python, or Excel — from the Export tab or the Statistics tab."
+          ))),
+          tags$li(HTML(paste0(
+            "<strong>Map PNG</strong>: click the camera icon inside the Map tab to save the current ",
+            "map viewport as a PNG image."
+          ))),
+          tags$li(HTML(paste0(
+            "<strong>Chart PNG</strong>: hover over any Plotly chart (PCA, ADMIXTURE bar, ",
+            "F-ROH, Ne, GEA biplot/Manhattan, Offset bar) and click the camera icon ",
+            "in its toolbar to download as PNG at 2&times; (print-quality) resolution. ",
+            "Note: the FST heatmap is an HTML table — use browser Print or screenshot to capture it."
+          ))),
+          tags$li(HTML(paste0(
+            "<strong>User Guide</strong>: full documentation available at ",
+            "<code>docs/USER_GUIDE.md</code> in the repository."
           )))
         ),
 
         tags$p(
           style = "margin-top: 1.4em; font-size:0.82em; color:#999;",
-          "Open-source \u2014 MIT licence \u2014 v", APP_VERSION,
+          "Open-source — MIT licence — v", APP_VERSION,
           " | ",
           tags$a("github.com/csunbird/population-genomics-map",
                  href   = "https://github.com/csunbird/population-genomics-map",

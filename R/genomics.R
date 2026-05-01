@@ -469,10 +469,39 @@ generate_demo_data <- function(seed = 42) {
   demo_qmatrix <- do.call(rbind, qmat_rows)
   rownames(demo_qmatrix) <- NULL
 
+  # --- Environmental variables (Phase 4 demo data) ----------------------------
+  # Simulated bioclimatic variables for the Borneo conservation landscape.
+  # BIO1      = Annual Mean Temperature (WorldClim convention: °C × 10)
+  # BIO12     = Annual Precipitation (mm/year)
+  # Elevation = metres above sea level
+  # Values are engineered to produce a clear genotype-environment signal:
+  # cooler, higher-elevation populations carry more genetic diversity (higher He).
+  demo_env_data <- data.frame(
+    population = c("Central Highland", "Northern Forest", "River Delta",
+                   "Eastern Ridge", "Southern Peatland"),
+    BIO1       = c(248, 252, 262, 244, 268),   # 24.8°C … 26.8°C
+    BIO12      = c(2800, 2950, 3400, 2400, 3600),
+    Elevation  = c(420, 320, 35, 380, 15),
+    stringsAsFactors = FALSE
+  )
+
+  # Future climate: CMIP6 SSP5-8.5 2041–2060 (illustrative SE-Asia projections).
+  # Temperature increases ~1.6–1.8 °C; precipitation shifts ±3–5%.
+  demo_future_env_data <- data.frame(
+    population = c("Central Highland", "Northern Forest", "River Delta",
+                   "Eastern Ridge", "Southern Peatland"),
+    BIO1       = c(264, 269, 279, 261, 285),
+    BIO12      = c(2740, 2890, 3320, 2350, 3530),
+    Elevation  = c(420, 320, 35, 380, 15),
+    stringsAsFactors = FALSE
+  )
+
   list(
     gt       = gt_combined,
     metadata = meta_combined,
     qmatrix  = demo_qmatrix,
+    env_data         = demo_env_data,
+    future_env_data  = demo_future_env_data,
     scenario_info = paste0(
       "Demo dataset: Simulated Sunda Clouded Leopard (Neofelis diardi), ",
       "Borneo conservation landscape. ",
@@ -1088,4 +1117,535 @@ fst_colour <- function(fst_vec) {
   cols           <- pal(clamped)
   cols[is.na(fst_vec)] <- "#DDDDDD"
   cols
+}
+
+# =============================================================================
+# Phase 4 — Adaptive Potential: RDA, LFMM2 GEA, Genomic Offset
+# =============================================================================
+
+#' Compute population-level alt-allele frequency matrix for RDA
+#'
+#' Returns a matrix (populations × loci) of alt-allele frequencies.
+#' Used as the response matrix in partial RDA.
+#'
+#' @param gt_matrix Numeric genotype matrix (samples × loci), rownames = sample IDs
+#' @param metadata  Data frame with columns: sample_id, population
+#' @return Numeric matrix (populations × loci), rownames = population names
+calc_pop_allele_freqs <- function(gt_matrix, metadata) {
+  common_ids <- intersect(rownames(gt_matrix), as.character(metadata$sample_id))
+  gt_sub     <- gt_matrix[common_ids, , drop = FALSE]
+  meta_sub   <- metadata[metadata$sample_id %in% common_ids, ]
+  populations <- unique(as.character(meta_sub$population))
+
+  freq_rows <- lapply(populations, function(pop) {
+    pop_ids <- as.character(meta_sub$sample_id[meta_sub$population == pop])
+    pop_gt  <- gt_sub[rownames(gt_sub) %in% pop_ids, , drop = FALSE]
+    apply(pop_gt, 2, function(locus) {
+      valid <- locus[!is.na(locus)]
+      if (length(valid) == 0) NA_real_ else sum(valid) / (2 * length(valid))
+    })
+  })
+
+  af_mat           <- do.call(rbind, freq_rows)
+  rownames(af_mat) <- populations
+  af_mat
+}
+
+#' Partial RDA of genotype-environment associations
+#'
+#' Performs: allele_freqs_hellinger ~ env_vars | lat + lon.
+#' Geography (lat/lon) is partialled out so constrained axes reflect
+#' genuine genotype-environment association beyond spatial autocorrelation.
+#'
+#' Requires the 'vegan' package (CRAN).
+#'
+#' @param gt_matrix  Numeric genotype matrix (samples × loci), rownames = sample IDs
+#' @param metadata   Data frame: sample_id, population, latitude, longitude
+#' @param env_data   Data frame: population + one column per env variable
+#' @param env_vars   Character vector of env variable column names in env_data
+#' @param scale_env  Logical: z-score scale env variables (default TRUE)
+#' @return Named list used by mod_gea.R and calc_genomic_offset()
+calc_rda <- function(gt_matrix, metadata, env_data, env_vars, scale_env = TRUE) {
+  if (!requireNamespace("vegan", quietly = TRUE)) {
+    stop("Package 'vegan' is required for RDA. Run: install.packages('vegan')")
+  }
+
+  # Population allele frequency matrix
+  pop_af <- calc_pop_allele_freqs(gt_matrix, metadata)
+
+  common_pops <- intersect(rownames(pop_af), as.character(env_data$population))
+  if (length(common_pops) < 3) {
+    stop(paste0(
+      "RDA requires at least 3 populations. Only ", length(common_pops),
+      " populations matched between genotype data and environmental data."
+    ))
+  }
+  if (length(common_pops) <= length(env_vars) + 2L) {
+    stop(paste0(
+      "Too few populations (", length(common_pops), ") for ", length(env_vars),
+      " environmental variables plus geography. ",
+      "Use at most ", length(common_pops) - 3L, " environmental variables."
+    ))
+  }
+
+  pop_af <- pop_af[common_pops, , drop = FALSE]
+
+  # Drop loci with NA allele frequency in any population
+  has_na  <- apply(pop_af, 2, anyNA)
+  pop_af  <- pop_af[, !has_na, drop = FALSE]
+  if (ncol(pop_af) < 10L) {
+    stop("Fewer than 10 loci have complete allele-frequency data across all populations.")
+  }
+
+  # Hellinger transformation (recommended for frequency data in RDA)
+  pop_af_hel <- vegan::decostand(pop_af, method = "hellinger")
+
+  # Align env and geo data
+  env_sub <- env_data[match(common_pops, as.character(env_data$population)), , drop = FALSE]
+
+  meta_matched <- metadata[metadata$sample_id %in% rownames(gt_matrix), ]
+  geo_centroids <- dplyr::group_by(meta_matched, population) |>
+    dplyr::summarise(
+      lat = mean(as.numeric(latitude),  na.rm = TRUE),
+      lon = mean(as.numeric(longitude), na.rm = TRUE),
+      .groups = "drop"
+    )
+  geo_sub <- geo_centroids[match(common_pops, geo_centroids$population), , drop = FALSE]
+
+  # Scale env variables; preserve attributes for offset projection
+  env_mat <- as.matrix(env_sub[, env_vars, drop = FALSE])
+  mode(env_mat) <- "numeric"
+  if (scale_env) {
+    env_mat_s <- scale(env_mat)
+  } else {
+    env_mat_s <- env_mat
+    attr(env_mat_s, "scaled:center") <- rep(0, length(env_vars))
+    attr(env_mat_s, "scaled:scale")  <- rep(1, length(env_vars))
+  }
+  colnames(env_mat_s) <- env_vars
+
+  geo_mat <- as.matrix(geo_sub[, c("lat", "lon"), drop = FALSE])
+  mode(geo_mat) <- "numeric"
+
+  constraint_df           <- as.data.frame(cbind(env_mat_s, geo_mat))
+  rownames(constraint_df) <- common_pops
+
+  # Partial RDA formula
+  rda_form <- as.formula(paste0(
+    "pop_af_hel ~ ", paste(env_vars, collapse = " + "),
+    " + Condition(lat + lon)"
+  ))
+
+  rda_obj <- tryCatch(
+    vegan::rda(rda_form, data = constraint_df),
+    error = function(e) stop(paste("RDA computation failed:", e$message))
+  )
+
+  # Variance partitioning
+  varpart_obj <- tryCatch(
+    vegan::varpart(pop_af_hel, env_mat_s, geo_mat),
+    error = function(e) NULL
+  )
+
+  # Extract scores (scaling = 2 = correlation biplot)
+  n_axes   <- min(2L, rda_obj$CCA$rank)
+  choices  <- seq_len(n_axes)
+  site_sc  <- vegan::scores(rda_obj, display = "sites",   scaling = 2, choices = choices)
+  bp_sc    <- vegan::scores(rda_obj, display = "bp",      scaling = 2, choices = choices)
+  sp_sc    <- vegan::scores(rda_obj, display = "species", scaling = 2, choices = choices)
+
+  # Coerce to matrix when only 1 axis (scores() returns a named vector)
+  to_mat <- function(x, nrow, rn, cn) {
+    if (!is.matrix(x)) matrix(x, nrow = nrow, ncol = 1,
+                               dimnames = list(rn, cn))
+    else x
+  }
+  axis_nm  <- paste0("RDA", choices)
+  site_sc  <- to_mat(site_sc, length(common_pops), common_pops,   axis_nm)
+  bp_sc    <- to_mat(bp_sc,   length(env_vars),    env_vars,       axis_nm)
+  sp_sc    <- to_mat(sp_sc,   ncol(pop_af),        NULL,           axis_nm)
+
+  # Axis labels with variance explained
+  eig       <- rda_obj$CCA$eig
+  total_chi <- rda_obj$tot.chi
+  pct_exp   <- round(100 * eig / total_chi, 1)
+  axis_labels <- paste0("RDA", seq_along(eig), " (", pct_exp, "%)")
+
+  # Top loci by absolute RDA1 loading (candidate adaptive loci from RDA)
+  rda1_abs     <- abs(sp_sc[, 1])
+  top_n        <- min(50L, length(rda1_abs))
+  top_loci_idx <- order(rda1_abs, decreasing = TRUE)[seq_len(top_n)]
+
+  list(
+    rda             = rda_obj,
+    varpart         = varpart_obj,
+    site_scores     = site_sc,
+    biplot_scores   = bp_sc,
+    species_scores  = sp_sc,
+    populations     = common_pops,
+    env_vars        = env_vars,
+    env_scaled      = env_mat_s,      # preserves center/scale for offset projection
+    geo_coords      = data.frame(population = common_pops,
+                                 lat = as.numeric(geo_sub$lat),
+                                 lon = as.numeric(geo_sub$lon),
+                                 stringsAsFactors = FALSE),
+    axis_labels     = axis_labels,
+    top_loci_idx    = top_loci_idx,
+    pct_constrained = round(100 * rda_obj$CCA$tot.chi / rda_obj$tot.chi, 1),
+    n_pops          = length(common_pops),
+    n_loci          = ncol(pop_af)
+  )
+}
+
+#' Per-locus genotype-environment association via LFMM2 (ridge estimator)
+#'
+#' Tests each SNP for significant association with each environmental variable
+#' using Latent Factor Mixed Models (Caye et al. 2019). Population structure is
+#' accounted for by K latent factors estimated from the genotype matrix.
+#'
+#' Requires the 'lfmm' package (CRAN: install.packages("lfmm")).
+#'
+#' @param gt_matrix  Numeric genotype matrix (samples × loci), rownames = sample IDs
+#' @param metadata   Data frame: sample_id, population
+#' @param env_data   Data frame: population + env variable columns
+#' @param env_vars   Character vector of env variable column names
+#' @param K          Number of latent factors. NULL = auto (min(3, n_pops - 1))
+#' @param alpha      FDR significance threshold (default 0.05)
+#' @return Data frame: locus_idx, env_var, pvalue, p_adj, z_score, gif, significant
+calc_lfmm2_gea <- function(gt_matrix, metadata, env_data, env_vars,
+                            K = NULL, alpha = 0.05) {
+  if (!requireNamespace("lfmm", quietly = TRUE)) {
+    stop(paste0(
+      "Package 'lfmm' is required for LFMM2 analysis. ",
+      "Install it with: install.packages('lfmm')"
+    ))
+  }
+
+  common_ids <- intersect(rownames(gt_matrix), as.character(metadata$sample_id))
+  gt_sub     <- gt_matrix[common_ids, , drop = FALSE]
+  meta_sub   <- metadata[metadata$sample_id %in% common_ids, ]
+
+  # Attach population-level env values to each individual
+  meta_sub <- dplyr::left_join(
+    meta_sub,
+    env_data[, c("population", env_vars), drop = FALSE],
+    by = "population"
+  )
+
+  if (any(is.na(meta_sub[, env_vars]))) {
+    stop("Some samples lack environmental data after merging with env_data. ",
+         "Check that all populations in the genomic metadata have matching rows in the env CSV.")
+  }
+
+  # Auto K: number of structure components, capped at min(10, n_pops - 1)
+  if (is.null(K)) {
+    n_pops <- length(unique(meta_sub$population))
+    K      <- as.integer(min(10L, max(1L, n_pops - 1L)))
+  }
+
+  env_matrix <- scale(as.matrix(meta_sub[, env_vars, drop = FALSE]))
+
+  results <- lapply(env_vars, function(var) {
+    env_vec <- as.numeric(env_matrix[, var])
+
+    mod <- tryCatch(
+      lfmm::lfmm2(input = gt_sub, env = env_vec, K = K),
+      error = function(e) stop(paste0("LFMM2 model fit failed for '", var, "': ", e$message))
+    )
+
+    test <- tryCatch(
+      lfmm::lfmm2.test(object = mod, input = gt_sub, env = env_vec, calibrate = "gif"),
+      error = function(e) stop(paste0("LFMM2 test failed for '", var, "': ", e$message))
+    )
+
+    pvals <- as.numeric(test$pvalues)
+    p_adj <- p.adjust(pvals, method = "BH")
+
+    data.frame(
+      locus_idx   = seq_len(ncol(gt_sub)),
+      env_var     = var,
+      pvalue      = round(pvals,  8),
+      p_adj       = round(p_adj,  8),
+      z_score     = round(as.numeric(test$zscores), 4),
+      gif         = round(as.numeric(test$gif[1]),  3),
+      significant = p_adj < alpha,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  do.call(rbind, results)
+}
+
+#' Compute RDA-based genomic offset between current and projected future climate
+#'
+#' Projects current and future environmental conditions through RDA biplot
+#' loadings to estimate the genomic distance each population must "travel"
+#' to remain locally adapted under the projected future climate.
+#'
+#' Method: Fitzpatrick & Keller (2015), offset = Euclidean distance in
+#' constrained RDA space between current and future env projections.
+#'
+#' @param rda_result  Output of calc_rda()
+#' @param future_env  Data frame: population + same env variable columns as rda_result
+#' @return Data frame: population, offset, offset_norm, lat, lon, risk_label, risk_colour
+calc_genomic_offset <- function(rda_result, future_env) {
+  env_vars   <- rda_result$env_vars
+  pops       <- rda_result$populations
+  bp_sc      <- rda_result$biplot_scores   # env_vars × RDA axes
+  env_s      <- rda_result$env_scaled
+
+  # Extract scaling parameters stored as attributes of the scaled matrix
+  env_center <- attr(env_s, "scaled:center") %||% rep(0, length(env_vars))
+  env_sd     <- attr(env_s, "scaled:scale")  %||% rep(1, length(env_vars))
+  names(env_center) <- env_vars
+  names(env_sd)     <- env_vars
+
+  # Align to common populations
+  common_pops <- intersect(pops, as.character(future_env$population))
+  if (length(common_pops) < 1L) {
+    stop("No populations matched between the RDA result and future environmental data.")
+  }
+
+  fut_sub   <- future_env[match(common_pops, as.character(future_env$population)), , drop = FALSE]
+  cur_sub_s <- env_s[match(common_pops, pops), , drop = FALSE]
+
+  # Scale future env using the same center/scale parameters as the current data
+  fut_mat   <- as.matrix(fut_sub[, env_vars, drop = FALSE])
+  mode(fut_mat) <- "numeric"
+  fut_mat_s <- scale(fut_mat, center = env_center, scale = env_sd)
+  colnames(fut_mat_s) <- env_vars
+
+  # Project through biplot loadings → RDA-space coordinates
+  cur_proj <- cur_sub_s %*% bp_sc    # n_pops × n_rda_axes
+  fut_proj <- fut_mat_s %*% bp_sc
+
+  # Euclidean offset
+  offset      <- sqrt(rowSums((fut_proj - cur_proj)^2))
+  max_off     <- max(offset, na.rm = TRUE)
+  if (!is.finite(max_off) || max_off == 0) max_off <- 1
+  offset_norm <- pmin(1, offset / max_off)
+
+  geo     <- rda_result$geo_coords
+  geo_sub <- geo[match(common_pops, geo$population), , drop = FALSE]
+
+  data.frame(
+    population  = common_pops,
+    offset      = round(offset,      4),
+    offset_norm = round(offset_norm, 4),
+    lat         = geo_sub$lat,
+    lon         = geo_sub$lon,
+    risk_label  = offset_risk_label(offset_norm),
+    risk_colour = offset_colour(offset_norm),
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Assign a conservation risk label to a normalised genomic offset value
+#'
+#' @param offset_norm Numeric in [0, 1] — normalised genomic offset
+#' @return Character risk label
+offset_risk_label <- function(offset_norm) {
+  dplyr::case_when(
+    is.na(offset_norm)  ~ "Unknown",
+    offset_norm >= 0.75 ~ "Severe — highest climate exposure",
+    offset_norm >= 0.50 ~ "High — significant climate exposure",
+    offset_norm >= 0.25 ~ "Moderate — some climate exposure",
+    TRUE                ~ "Low — least climate exposure"
+  )
+}
+
+#' Assign a colour to a normalised genomic offset value for map rendering
+#'
+#' @param offset_norm Numeric in [0, 1] — normalised genomic offset
+#' @return Hex colour string
+offset_colour <- function(offset_norm) {
+  dplyr::case_when(
+    is.na(offset_norm)  ~ "#AAAAAA",
+    offset_norm >= 0.75 ~ "#D32F2F",   # red    — Severe
+    offset_norm >= 0.50 ~ "#F57C00",   # orange — High
+    offset_norm >= 0.25 ~ "#FBC02D",   # amber  — Moderate
+    TRUE                ~ "#1565C0"    # blue   — Low
+  )
+}
+
+#' Validate an environmental data frame against the loaded population list
+#'
+#' @param env_df   Data frame from user CSV (must have a 'population' column)
+#' @param metadata Metadata data frame from upload_data
+#' @return List: $errors, $warnings, $info, $valid, $matched_pops, $env_vars
+validate_env_data <- function(env_df, metadata) {
+  errors   <- character(0)
+  warnings <- character(0)
+  info     <- character(0)
+
+  if (!"population" %in% names(env_df)) {
+    errors <- c(errors, paste0(
+      "Environmental CSV must have a 'population' column whose values match ",
+      "the population names in the sample metadata."
+    ))
+    return(list(errors = errors, warnings = warnings, info = info,
+                valid = FALSE, matched_pops = character(0), env_vars = character(0)))
+  }
+
+  env_var_cols <- setdiff(names(env_df), "population")
+  if (length(env_var_cols) == 0) {
+    errors <- c(errors, paste0(
+      "No environmental variable columns found. The CSV must have at least one ",
+      "numeric column beyond 'population' (e.g. BIO1, temperature, elevation)."
+    ))
+  }
+
+  known_pops   <- unique(as.character(metadata$population))
+  env_pops     <- unique(as.character(env_df$population))
+  matched_pops <- intersect(env_pops, known_pops)
+  env_only     <- setdiff(env_pops,   known_pops)
+  gt_only      <- setdiff(known_pops, env_pops)
+
+  if (length(matched_pops) == 0) {
+    errors <- c(errors, paste0(
+      "No population names matched. ",
+      "Env CSV populations: [", paste(head(env_pops, 3), collapse = ", "), "] | ",
+      "Genomic populations: [", paste(head(known_pops, 3), collapse = ", "), "]. ",
+      "Names must match exactly (case-sensitive)."
+    ))
+  } else {
+    info <- c(info, paste0(length(matched_pops), " of ", length(known_pops),
+                           " populations matched."))
+    if (length(env_only) > 0) {
+      warnings <- c(warnings, paste0(
+        length(env_only), " env CSV population(s) have no genomic data (ignored): ",
+        paste(head(env_only, 4), collapse = ", "),
+        if (length(env_only) > 4) " …" else "."
+      ))
+    }
+    if (length(gt_only) > 0) {
+      warnings <- c(warnings, paste0(
+        length(gt_only), " genomic population(s) lack environmental data (excluded from RDA/GEA): ",
+        paste(head(gt_only, 4), collapse = ", "),
+        if (length(gt_only) > 4) " …" else "."
+      ))
+    }
+  }
+
+  # Non-numeric columns
+  bad_cols <- env_var_cols[!vapply(
+    env_df[, env_var_cols, drop = FALSE], is.numeric, logical(1)
+  )]
+  if (length(bad_cols) > 0) {
+    errors <- c(errors, paste0(
+      "Environmental variable columns must be numeric. Non-numeric: ",
+      paste(bad_cols, collapse = ", "), "."
+    ))
+  }
+
+  # NA values
+  na_cols <- env_var_cols[apply(
+    env_df[, env_var_cols, drop = FALSE], 2, function(x) any(is.na(x))
+  )]
+  if (length(na_cols) > 0) {
+    warnings <- c(warnings, paste0(
+      "NA values found in: ", paste(na_cols, collapse = ", "),
+      ". Rows with NAs will be excluded from analyses."
+    ))
+  }
+
+  list(
+    errors       = errors,
+    warnings     = warnings,
+    info         = info,
+    valid        = length(errors) == 0,
+    matched_pops = matched_pops,
+    env_vars     = env_var_cols
+  )
+}
+
+#' Fetch WorldClim 2.1 bioclimatic variables at population centroids
+#'
+#' Downloads WorldClim rasters via the 'geodata' package and extracts values
+#' at the centroid coordinates of each population. Requires internet access.
+#' Rasters are cached locally to avoid repeated downloads.
+#'
+#' @param metadata Data frame: sample_id, population, latitude, longitude
+#' @param vars     Integer vector of BIO variable numbers (1–19).
+#'                 Default: c(1, 4, 12, 15) — mean temp, temp seasonality,
+#'                 annual precip, precip seasonality.
+#' @param path     Directory to cache downloaded rasters (default tempdir())
+#' @return Data frame: population, lat, lon, BIO1, BIO12, …
+fetch_worldclim_env <- function(metadata, vars = c(1L, 4L, 12L, 15L),
+                                path = tempdir()) {
+  for (pkg in c("geodata", "terra")) {
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+      stop(paste0("Package '", pkg, "' is required. Run: install.packages('", pkg, "')"))
+    }
+  }
+
+  # Population centroid coordinates
+  pop_coords <- dplyr::group_by(metadata, population) |>
+    dplyr::summarise(
+      lat = mean(as.numeric(latitude),  na.rm = TRUE),
+      lon = mean(as.numeric(longitude), na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    as.data.frame()
+
+  pts     <- terra::vect(pop_coords, geom = c("lon", "lat"), crs = "EPSG:4326")
+  bio_all <- geodata::worldclim_global(var = "bio", res = 2.5, path = path)
+  bio_sub <- bio_all[[vars]]
+
+  extracted <- as.data.frame(terra::extract(bio_sub, pts, ID = FALSE))
+  colnames(extracted) <- paste0("BIO", vars)
+
+  result <- cbind(pop_coords, extracted)
+  result[, c("population", "lat", "lon", paste0("BIO", vars))]
+}
+
+#' Fetch CMIP6 climate projections at population centroids
+#'
+#' Downloads WorldClim CMIP6 delta-downscaled projections and extracts values
+#' at population centroids. Requires internet access.
+#'
+#' @param metadata Data frame: sample_id, population, latitude, longitude
+#' @param vars     Integer vector of BIO variable numbers (1–19)
+#' @param ssp      SSP scenario code: "245" or "585"
+#' @param period   Time period: "2041-2060" or "2061-2080"
+#' @param model    CMIP6 model identifier (default "ACCESS-CM2")
+#' @param path     Directory to cache downloaded rasters
+#' @return Data frame: population, lat, lon, BIO1, BIO12, …
+fetch_cmip6_env <- function(metadata,
+                             vars   = c(1L, 4L, 12L, 15L),
+                             ssp    = "585",
+                             period = "2041-2060",
+                             model  = "ACCESS-CM2",
+                             path   = tempdir()) {
+  for (pkg in c("geodata", "terra")) {
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+      stop(paste0("Package '", pkg, "' is required. Run: install.packages('", pkg, "')"))
+    }
+  }
+
+  pop_coords <- dplyr::group_by(metadata, population) |>
+    dplyr::summarise(
+      lat = mean(as.numeric(latitude),  na.rm = TRUE),
+      lon = mean(as.numeric(longitude), na.rm = TRUE),
+      .groups = "drop"
+    ) |>
+    as.data.frame()
+
+  pts       <- terra::vect(pop_coords, geom = c("lon", "lat"), crs = "EPSG:4326")
+
+  cmip_rast <- geodata::cmip6_world(
+    model  = model,
+    ssp    = ssp,
+    time   = period,
+    var    = "bioc",
+    res    = 2.5,
+    path   = path
+  )
+  cmip_sub  <- cmip_rast[[vars]]
+
+  extracted <- as.data.frame(terra::extract(cmip_sub, pts, ID = FALSE))
+  colnames(extracted) <- paste0("BIO", vars)
+
+  result <- cbind(pop_coords, extracted)
+  result[, c("population", "lat", "lon", paste0("BIO", vars))]
 }

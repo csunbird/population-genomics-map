@@ -285,7 +285,12 @@ neServer <- function(id, upload_data) {
         plotly::config(
           displayModeBar         = TRUE,
           modeBarButtonsToRemove = c("lasso2d", "select2d", "autoScale2d"),
-          displaylogo            = FALSE
+          displaylogo            = FALSE,
+          toImageButtonOptions   = list(
+            format   = "png",
+            scale    = 2,
+            filename = "popgen_ne"
+          )
         )
     })
 

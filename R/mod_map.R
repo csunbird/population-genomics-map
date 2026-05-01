@@ -162,7 +162,7 @@ mapServer <- function(id, pop_stats, fst_mat, pop_q = reactive(NULL),
 
     # ── Base map (rendered once; subsequent updates use leafletProxy) ─────
     output$map <- renderLeaflet({
-      leaflet(options = leafletOptions(
+      m <- leaflet(options = leafletOptions(
         zoomControl   = TRUE,
         preferCanvas  = TRUE   # Canvas renderer: far fewer DOM operations during
                                # zoom/pan than the default SVG renderer
@@ -190,6 +190,24 @@ mapServer <- function(id, pop_stats, fst_mat, pop_q = reactive(NULL),
           options    = layersControlOptions(collapsed = FALSE)
         ) |>
         setView(lng = 0, lat = 20, zoom = 2)
+
+      # ── Phase 5: screenshot button (PNG export) ──────────────────────────
+      # leaflet.extras2::addScreenshotControl() adds a camera-icon button that
+      # uses the leaflet-simple-map-screenshoter JS plugin to capture the current
+      # map viewport as PNG — pure client-side, no server round-trip.
+      if (requireNamespace("leaflet.extras2", quietly = TRUE)) {
+        m <- m |> leaflet.extras2::addScreenshotControl(
+          options = leaflet.extras2::screenshotControlOptions(
+            position    = "topleft",
+            title       = "Save map as PNG",
+            iconUrl     = NULL,       # default camera icon
+            hideElementsWithSelectors = ".leaflet-control-zoom",
+            screenType  = "Canvas"    # matches preferCanvas = TRUE above
+          )
+        )
+      }
+
+      m
     })
 
     # ── Observe: new dataset loaded ───────────────────────────────────────
